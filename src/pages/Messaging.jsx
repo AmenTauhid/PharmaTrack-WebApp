@@ -9,7 +9,7 @@ import {
   createConversation,
   getPatient
 } from '../services/dataService';
-import { FaArrowLeft, FaPaperPlane, FaUser } from 'react-icons/fa';
+import { FaArrowLeft, FaPaperPlane, FaUser, FaComments } from 'react-icons/fa';
 
 const PageContainer = styled.div`
   height: calc(100vh - 64px);
