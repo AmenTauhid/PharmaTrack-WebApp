@@ -2,12 +2,13 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useLocation, Link } from 'react-router-dom';
 import styled from 'styled-components';
 import { useAuth } from '../services/AuthContext';
+import { useConversations } from '../services/ConversationContext';
 import { 
-  getUserConversations, 
   getConversationMessages, 
   sendMessage, 
   createConversation,
-  getPatient
+  getPatient,
+  subscribeToMessages
 } from '../services/dataService';
 import { FaArrowLeft, FaPaperPlane, FaUser, FaComments } from 'react-icons/fa';
 
@@ -174,71 +175,83 @@ const EmptyState = styled.div`
 function Messaging() {
   const location = useLocation();
   const { currentUser } = useAuth();
-  const [conversations, setConversations] = useState([]);
+  const { conversations, loading: conversationsLoading, addOrUpdateConversation } = useConversations();
   const [messages, setMessages] = useState([]);
   const [selectedConversation, setSelectedConversation] = useState(null);
   const [patientDetails, setPatientDetails] = useState(null);
   const [newMessage, setNewMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const messagesEndRef = useRef(null);
+  const unsubscribeMessagesRef = useRef(null);
 
   // Get patientId from URL if it exists
   const searchParams = new URLSearchParams(location.search);
   const patientIdFromUrl = searchParams.get('patientId');
 
   useEffect(() => {
-    const loadConversations = async () => {
-      try {
-        setLoading(true);
-        if (currentUser) {
-          const conversationsData = await getUserConversations(currentUser.uid);
-          setConversations(conversationsData);
-          
-          // If patientId is in URL and we don't have a conversation with this patient,
-          // we'll create one when the user sends the first message
-          if (patientIdFromUrl) {
-            const existingConversation = conversationsData.find(conv => 
-              conv.participants.includes(patientIdFromUrl)
-            );
-            
-            if (existingConversation) {
-              setSelectedConversation(existingConversation);
-              loadMessages(existingConversation.id);
-              loadPatientDetails(patientIdFromUrl);
-            } else {
-              // Load patient details for new conversation
-              loadPatientDetails(patientIdFromUrl);
-            }
-          } else if (conversationsData.length > 0) {
-            // Select first conversation by default if no patientId in URL
-            setSelectedConversation(conversationsData[0]);
-            
-            // Find the participant that is not the current user
-            const otherParticipant = conversationsData[0].participants.find(
-              p => p !== currentUser.uid
-            );
-            
-            loadMessages(conversationsData[0].id);
-            loadPatientDetails(otherParticipant);
-          }
+    // Set loading state based on conversations loading state
+    setLoading(conversationsLoading);
+    
+    // Select conversation based on URL or default to first conversation
+    if (!selectedConversation) {
+      if (patientIdFromUrl) {
+        // If patientId is in URL, find or prepare for new conversation
+        const existingConversation = conversations.find(conv => 
+          conv.participants && conv.participants.includes(patientIdFromUrl)
+        );
+        
+        if (existingConversation) {
+          console.log("Found existing conversation with patient from URL:", existingConversation);
+          setSelectedConversation(existingConversation);
+          loadMessages(existingConversation.id);
+          loadPatientDetails(patientIdFromUrl);
+        } else {
+          // Load patient details for potential new conversation
+          console.log("No existing conversation with patient from URL, loading patient details");
+          loadPatientDetails(patientIdFromUrl);
         }
-      } catch (error) {
-        console.error('Error loading conversations:', error);
-      } finally {
-        setLoading(false);
+      } else if (conversations.length > 0) {
+        // Select first conversation by default
+        console.log("Selecting first conversation by default:", conversations[0]);
+        setSelectedConversation(conversations[0]);
+        
+        // Find patient participant
+        const otherParticipant = conversations[0].participants.find(
+          p => p !== currentUser?.uid
+        );
+        
+        if (otherParticipant) {
+          loadMessages(conversations[0].id);
+          loadPatientDetails(otherParticipant);
+        }
+      }
+    }
+    
+    // Cleanup message subscription on unmount
+    return () => {
+      console.log("Cleaning up message subscription");
+      if (unsubscribeMessagesRef.current) {
+        unsubscribeMessagesRef.current();
+        unsubscribeMessagesRef.current = null;
       }
     };
-    
-    loadConversations();
-  }, [currentUser, patientIdFromUrl]);
+  }, [conversations, conversationsLoading, currentUser?.uid, patientIdFromUrl, selectedConversation]);
 
-  const loadMessages = async (conversationId) => {
+  const loadMessages = (conversationId) => {
     try {
-      const messagesData = await getConversationMessages(conversationId);
-      setMessages(messagesData);
-      setTimeout(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-      }, 100);
+      // Clean up previous subscription if any
+      if (unsubscribeMessagesRef.current) {
+        unsubscribeMessagesRef.current();
+      }
+      
+      // Subscribe to real-time updates
+      unsubscribeMessagesRef.current = subscribeToMessages(conversationId, (messagesData) => {
+        console.log("Received messages from subscription:", messagesData);
+        setMessages(messagesData);
+        setTimeout(() => {
+          messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        }, 100);
+      });
     } catch (error) {
       console.error('Error loading messages:', error);
     }
@@ -254,6 +267,8 @@ function Messaging() {
   };
 
   const handleSelectConversation = (conversation) => {
+    console.log("Selecting conversation:", conversation);
+    
     setSelectedConversation(conversation);
     
     // Find the participant that is not the current user
@@ -261,42 +276,121 @@ function Messaging() {
       p => p !== currentUser.uid
     );
     
+    if (!otherParticipant) {
+      console.error("Could not find other participant in conversation:", conversation);
+    } else {
+      console.log(`Loading details for participant: ${otherParticipant}`);
+      loadPatientDetails(otherParticipant);
+    }
+    
+    // Load messages for this conversation
+    console.log(`Loading messages for conversation: ${conversation.id}`);
     loadMessages(conversation.id);
-    loadPatientDetails(otherParticipant);
   };
 
   const handleSendMessage = async () => {
     if (!newMessage.trim()) return;
     
+    console.log("Sending message:", newMessage);
+    console.log("Selected conversation:", selectedConversation);
+    
     try {
       if (selectedConversation) {
         // Send to existing conversation
+        console.log(`Sending to existing conversation ${selectedConversation.id}`);
         await sendMessage(selectedConversation.id, currentUser.uid, newMessage);
+        
+        // Update the conversation in the context with latest message
+        const updatedConv = {
+          ...selectedConversation,
+          lastMessage: newMessage,
+          lastMessageTime: new Date()
+        };
+        
+        // Update conversation in context
+        addOrUpdateConversation(updatedConv);
+        
+        // Set this as selected conversation
+        setSelectedConversation(updatedConv);
+        
+        // Temporary workaround - manually add message to state
+        const tempMessage = {
+          id: `temp-${Date.now()}`,
+          sender: currentUser.uid,
+          text: newMessage,
+          timestamp: new Date()
+        };
+        setMessages(prev => [...prev, tempMessage]);
+        
         setNewMessage('');
         
-        // Reload messages to show the new message
-        loadMessages(selectedConversation.id);
+        // Fallback to manual reload in case subscription isn't working
+        setTimeout(() => {
+          getConversationMessages(selectedConversation.id).then(messagesData => {
+            console.log("Manual reload messages:", messagesData);
+            setMessages(messagesData);
+          });
+        }, 500);
       } else if (patientIdFromUrl) {
         // Create new conversation if we have a patient ID from URL
+        console.log(`Creating new conversation with patient ${patientIdFromUrl}`);
+        
+        // Make sure we have patient details
+        if (!patientDetails) {
+          console.log("Loading patient details before creating conversation");
+          await loadPatientDetails(patientIdFromUrl);
+        }
+        
         const conversationId = await createConversation(
           currentUser.uid, 
           patientIdFromUrl,
           newMessage
         );
         
+        console.log(`New conversation created with ID: ${conversationId}`);
+        
         // Send the first message
         await sendMessage(conversationId, currentUser.uid, newMessage);
+        
+        // Temporary workaround - manually add message to state
+        const tempMessage = {
+          id: `temp-${Date.now()}`,
+          sender: currentUser.uid,
+          text: newMessage,
+          timestamp: new Date()
+        };
+        
+        // Create new conversation object
+        const newConv = {
+          id: conversationId,
+          participants: [currentUser.uid, patientIdFromUrl],
+          lastMessage: newMessage,
+          lastMessageTime: new Date(),
+          patientName: patientDetails ? `${patientDetails.firstName} ${patientDetails.lastName}` : 'Patient'
+        };
+        
+        // Add to conversations in context
+        console.log("Adding new conversation to context:", newConv);
+        addOrUpdateConversation(newConv);
+        
+        // Set as selected conversation
+        setSelectedConversation(newConv);
+        
+        // Set messages directly
+        setMessages([tempMessage]);
+        
         setNewMessage('');
         
-        // Reload conversations and select the new one
-        const conversationsData = await getUserConversations(currentUser.uid);
-        setConversations(conversationsData);
+        // Set up messages subscription for the new conversation
+        loadMessages(conversationId);
         
-        const newConversation = conversationsData.find(c => c.id === conversationId);
-        if (newConversation) {
-          setSelectedConversation(newConversation);
-          loadMessages(newConversation.id);
-        }
+        // Fallback to manual reload in case subscription isn't working
+        setTimeout(() => {
+          getConversationMessages(conversationId).then(messagesData => {
+            console.log("Manual reload messages for new conversation:", messagesData);
+            setMessages(messagesData);
+          });
+        }, 500);
       }
     } catch (error) {
       console.error('Error sending message:', error);
@@ -305,60 +399,95 @@ function Messaging() {
 
   const formatTime = (timestamp) => {
     if (!timestamp) return '';
+    
+    console.log("Formatting timestamp:", timestamp);
+    
     // Handle case where timestamp might be null, undefined, or not have toDate method
     try {
-      // Make sure timestamp is an object before accessing toDate
+      // Handle Firestore Timestamp objects
       if (timestamp && typeof timestamp === 'object' && timestamp.toDate) {
         return timestamp.toDate().toLocaleTimeString('en-US', { 
           hour: '2-digit', 
           minute: '2-digit'
         });
-      } else if (typeof timestamp === 'string') {
-        // Handle string timestamps
+      } 
+      // Handle Firebase server timestamp placeholders 
+      else if (timestamp && timestamp.seconds && timestamp.nanoseconds) {
+        const date = new Date(timestamp.seconds * 1000 + timestamp.nanoseconds / 1000000);
+        return date.toLocaleTimeString('en-US', { 
+          hour: '2-digit', 
+          minute: '2-digit'
+        });
+      }
+      // Handle string timestamps
+      else if (typeof timestamp === 'string') {
         return timestamp;
-      } else {
-        // If it's some other format, try to create a date
+      } 
+      // Handle date objects
+      else if (timestamp instanceof Date) {
+        return timestamp.toLocaleTimeString('en-US', { 
+          hour: '2-digit', 
+          minute: '2-digit'
+        });
+      }
+      // If it's some other format, try to create a date
+      else {
         return new Date(timestamp).toLocaleTimeString('en-US', { 
           hour: '2-digit', 
           minute: '2-digit'
         });
       }
     } catch (error) {
-      console.error('Error formatting timestamp:', error);
-      return 'Invalid time';
+      console.error('Error formatting timestamp:', error, typeof timestamp);
+      return 'Just now';
     }
   };
 
-  if (loading && !conversations.length) {
-    return <div>Loading messages...</div>;
+  // Show loading state if either conversations or messages are loading
+  if ((loading || conversationsLoading) && !conversations.length) {
+    return <div className="page-loading">Loading conversations...</div>;
   }
 
   return (
     <PageContainer>
       <Sidebar>
         <SidebarHeader>
-          <SidebarTitle>Messages</SidebarTitle>
+          <SidebarTitle>Messages ({conversations.length})</SidebarTitle>
         </SidebarHeader>
         <ConversationList>
           {conversations.length === 0 ? (
             <div style={{ padding: '1rem' }}>No conversations yet</div>
           ) : (
-            conversations.map(conversation => (
-              <ConversationItem 
-                key={conversation.id} 
-                active={selectedConversation?.id === conversation.id}
-                onClick={() => handleSelectConversation(conversation)}
-              >
-                <ConversationName>
-                  {conversation.patientName || 'Patient'}
-                </ConversationName>
-                <LastMessage>
-                  {conversation.lastMessage || 'No messages yet'}
-                  {conversation.lastMessageTime && 
-                   ` - ${formatTime(conversation.lastMessageTime)}`}
-                </LastMessage>
-              </ConversationItem>
-            ))
+            conversations.map(conversation => {
+              console.log("Rendering conversation:", conversation);
+              
+              // Skip invalid conversations
+              if (!conversation || !conversation.id) {
+                console.warn("Invalid conversation in list:", conversation);
+                return null;
+              }
+              
+              // Check if this is the active conversation
+              const isActive = selectedConversation?.id === conversation.id;
+              console.log(`Conversation ${conversation.id} active: ${isActive}`);
+              
+              return (
+                <ConversationItem 
+                  key={conversation.id} 
+                  active={isActive}
+                  onClick={() => handleSelectConversation(conversation)}
+                >
+                  <ConversationName>
+                    {conversation.patientName || 'Patient'}
+                  </ConversationName>
+                  <LastMessage>
+                    {conversation.lastMessage || 'No messages yet'}
+                    {conversation.lastMessageTime && 
+                     ` - ${formatTime(conversation.lastMessageTime)}`}
+                  </LastMessage>
+                </ConversationItem>
+              );
+            }).filter(Boolean)
           )}
         </ConversationList>
       </Sidebar>
@@ -395,17 +524,29 @@ function Messaging() {
                   No messages yet. Start the conversation!
                 </div>
               ) : (
-                messages.map(message => (
-                  <MessageBubble 
-                    key={message.id} 
-                    sent={message.sender === currentUser.uid}
-                  >
-                    {message.text}
-                    <MessageTime>
-                      {formatTime(message.timestamp)}
-                    </MessageTime>
-                  </MessageBubble>
-                ))
+                messages.map(message => {
+                  console.log("Rendering message:", message);
+                  console.log("Current user:", currentUser?.uid);
+                  console.log("Is sent by current user?", message.sender === currentUser?.uid);
+                  
+                  // Make sure message has the required fields
+                  if (!message.text) {
+                    console.warn("Message missing text:", message);
+                    return null;
+                  }
+                  
+                  return (
+                    <MessageBubble 
+                      key={message.id || `temp-${Date.now()}-${Math.random()}`} 
+                      sent={message.sender === currentUser?.uid}
+                    >
+                      {message.text}
+                      <MessageTime>
+                        {formatTime(message.timestamp)}
+                      </MessageTime>
+                    </MessageBubble>
+                  );
+                }).filter(msg => msg !== null)
               )}
               <div ref={messagesEndRef} />
             </MessagesContainer>

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './services/AuthContext';
+import { ConversationProvider } from './services/ConversationContext';
 
 // Pages
 import Login from './pages/Login';
@@ -71,30 +72,32 @@ function App() {
   return (
     <ErrorBoundary>
       <AuthProvider>
-        <Router>
-          <Routes>
-            <Route path="/login" element={<Login />} />
-            <Route path="/" element={
-              <ProtectedRoute>
-                <Navbar />
-                <Dashboard />
-              </ProtectedRoute>
-            } />
-            <Route path="/patient/:id" element={
-              <ProtectedRoute>
-                <Navbar />
-                <PatientDetails />
-              </ProtectedRoute>
-            } />
-            <Route path="/messages" element={
-              <ProtectedRoute>
-                <Navbar />
-                <Messaging />
-              </ProtectedRoute>
-            } />
-            <Route path="*" element={<Navigate to="/" />} />
-          </Routes>
-        </Router>
+        <ConversationProvider>
+          <Router>
+            <Routes>
+              <Route path="/login" element={<Login />} />
+              <Route path="/" element={
+                <ProtectedRoute>
+                  <Navbar />
+                  <Dashboard />
+                </ProtectedRoute>
+              } />
+              <Route path="/patient/:id" element={
+                <ProtectedRoute>
+                  <Navbar />
+                  <PatientDetails />
+                </ProtectedRoute>
+              } />
+              <Route path="/messages" element={
+                <ProtectedRoute>
+                  <Navbar />
+                  <Messaging />
+                </ProtectedRoute>
+              } />
+              <Route path="*" element={<Navigate to="/" />} />
+            </Routes>
+          </Router>
+        </ConversationProvider>
       </AuthProvider>
     </ErrorBoundary>
   );

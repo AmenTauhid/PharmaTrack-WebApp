@@ -8,7 +8,8 @@ import {
   orderBy, 
   addDoc, 
   updateDoc, 
-  serverTimestamp 
+  serverTimestamp,
+  onSnapshot
 } from 'firebase/firestore';
 import { db } from './firebase';
 
@@ -43,6 +44,44 @@ export const getUserConversations = async (userId) => {
   return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 };
 
+// Subscribe to user conversations in real-time
+export const subscribeToConversations = (userId, callback) => {
+  console.log(`Setting up conversations subscription for user: ${userId}`);
+  
+  try {
+    const conversationsRef = collection(db, 'conversations');
+    const q = query(
+      conversationsRef,
+      where('participants', 'array-contains', userId),
+      orderBy('lastMessageTime', 'desc')
+    );
+    
+    // Verify query
+    console.log(`Subscribing to conversations for ${userId}`);
+    
+    return onSnapshot(q, 
+      (snapshot) => {
+        console.log(`Conversations snapshot received with ${snapshot.docs.length} docs`);
+        const conversations = snapshot.docs.map(doc => {
+          const data = doc.data();
+          console.log("Conversation data:", data);
+          return { 
+            id: doc.id, 
+            ...data 
+          };
+        });
+        callback(conversations);
+      },
+      (error) => {
+        console.error("Error in conversations subscription:", error);
+      }
+    );
+  } catch (error) {
+    console.error("Failed to set up conversations subscription:", error);
+    return () => {}; // Return empty function as unsubscribe
+  }
+};
+
 // Get messages for a specific conversation
 export const getConversationMessages = async (conversationId) => {
   const q = query(
@@ -54,35 +93,105 @@ export const getConversationMessages = async (conversationId) => {
   return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 };
 
+// Subscribe to messages real-time updates
+export const subscribeToMessages = (conversationId, callback) => {
+  console.log(`Setting up subscription for conversation: ${conversationId}`);
+  
+  try {
+    const messagesRef = collection(db, 'conversations', conversationId, 'messages');
+    const q = query(messagesRef, orderBy('timestamp', 'asc'));
+    
+    // Verify collection path is valid
+    console.log(`Subscribing to: ${messagesRef.path}`);
+    
+    return onSnapshot(q, 
+      (snapshot) => {
+        console.log(`Snapshot received with ${snapshot.docs.length} docs`);
+        const messages = snapshot.docs.map(doc => {
+          const data = doc.data();
+          // Add debugging info
+          console.log("Message data:", data);
+          
+          // Ensure message has the expected structure
+          return { 
+            id: doc.id, // Use document ID as message ID
+            sender: data.sender,
+            text: data.text,
+            timestamp: data.timestamp,
+            ...data  // Include any other fields
+          };
+        });
+        console.log("Processed messages:", messages);
+        callback(messages);
+      },
+      (error) => {
+        console.error("Error in messages subscription:", error);
+      }
+    );
+  } catch (error) {
+    console.error("Failed to set up messages subscription:", error);
+    return () => {}; // Return empty function as unsubscribe
+  }
+};
+
 // Send a message in a conversation
 export const sendMessage = async (conversationId, senderId, text) => {
-  // First, add the message to the subcollection
-  const messageData = {
-    sender: senderId,
-    text: text,
-    timestamp: serverTimestamp()
-  };
+  console.log(`Sending message to conversation ${conversationId} from ${senderId}: ${text}`);
   
-  await addDoc(collection(db, 'conversations', conversationId, 'messages'), messageData);
-  
-  // Then update the conversation with the last message
-  const conversationRef = doc(db, 'conversations', conversationId);
-  await updateDoc(conversationRef, {
-    lastMessage: text,
-    lastMessageTime: serverTimestamp()
-  });
-  
-  return true;
+  try {
+    // First, add the message to the subcollection
+    const messageData = {
+      sender: senderId,
+      text: text,
+      timestamp: serverTimestamp()
+    };
+    
+    console.log("Message data to save:", messageData);
+    
+    const messagesRef = collection(db, 'conversations', conversationId, 'messages');
+    console.log(`Writing to collection: ${messagesRef.path}`);
+    
+    const docRef = await addDoc(messagesRef, messageData);
+    console.log(`Message written with ID: ${docRef.id}`);
+    
+    // Then update the conversation with the last message
+    const conversationRef = doc(db, 'conversations', conversationId);
+    await updateDoc(conversationRef, {
+      lastMessage: text,
+      lastMessageTime: serverTimestamp()
+    });
+    
+    console.log("Conversation updated with last message");
+    return true;
+  } catch (error) {
+    console.error("Error sending message:", error);
+    throw error;
+  }
 };
 
 // Create a new conversation
 export const createConversation = async (pharmacistId, patientId, initialMessage) => {
+  // Try to get patient name to include in the conversation
+  let patientName = null;
+  try {
+    const patientDoc = await getDoc(doc(db, 'patients', patientId));
+    if (patientDoc.exists()) {
+      const patientData = patientDoc.data();
+      patientName = `${patientData.firstName} ${patientData.lastName}`;
+    }
+  } catch (error) {
+    console.error('Error getting patient name for conversation:', error);
+  }
+  
   const conversationData = {
     participants: [pharmacistId, patientId],
     createdAt: serverTimestamp(),
     lastMessage: initialMessage || '',
-    lastMessageTime: serverTimestamp()
+    lastMessageTime: serverTimestamp(),
+    patientName: patientName || 'Patient' // Include patient name in conversation data
   };
+  
+  console.log(`Creating conversation with data:`, conversationData);
   
   const docRef = await addDoc(collection(db, 'conversations'), conversationData);
   return docRef.id;
