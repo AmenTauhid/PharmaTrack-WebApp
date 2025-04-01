@@ -1,0 +1,24 @@
+{
+  "name": "pharmatrack-web",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "firebase": "^10.14.1",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-icons": "^4.11.0",
+    "react-router-dom": "^6.16.0",
+    "styled-components": "^6.0.8"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.0.4",
+    "dotenv": "^16.4.7",
+    "vite": "^4.4.9"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "serve": "vite preview",
+    "sample-data": "node scripts/populateSampleData.js"
+  }
+}
